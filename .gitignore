@@ -11,6 +11,9 @@ __pycache__/
 venv/
 env/
 
+# Offline dependency wheels (see README)
+wheels/
+
 # Build / coverage output
 build/
 dist/

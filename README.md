@@ -6,6 +6,7 @@ the backend normalizes them into a single model of conversations and
 messages, and a client reads and replies through one JSON API.
 
 This repo is the backend only: Flask, SQLite and the standard library.
+Requires Python 3.10+. Flask is the only third-party dependency.
 
 ## Quick start
 
@@ -17,11 +18,17 @@ python run.py                 # http://localhost:5000, creates instance/aiochat.
 python scripts/seed.py        # optional demo data (Slack + Telegram)
 ```
 
-Run the tests (no server or external services needed):
+Run the tests (no server, external services, flags or environment variables
+needed; each test uses its own temporary database):
 
 ```bash
 python -m unittest discover -s tests -t .
 ```
+
+No network access? Download the wheels on a machine that has it
+(`pip download -r requirements.txt -d wheels`), copy the `wheels/` folder
+over, and install with
+`pip install --no-index --find-links wheels -r requirements.txt`.
 
 ## Configuration
 
