@@ -1,8 +1,16 @@
 """/api/webhooks — inbound events from external platforms.
 
 Each channel gets its own URL, ``/api/webhooks/<platform>/<channel_id>``, and
-must send the channel's token in the ``X-Webhook-Token`` header. These routes
-do not use the client API token.
+every call must carry the channel's webhook token. Platforms differ in how
+they can present it, so three places are accepted:
+
+* ``?token=...`` in the URL — Slack's Events API only lets you configure a
+  URL, so the token rides along in the query string.
+* ``X-Telegram-Bot-Api-Secret-Token`` header — what Telegram sends when the
+  webhook was registered with ``secret_token``.
+* ``X-Webhook-Token`` header — for anything else (tests, curl).
+
+These routes do not use the client API token.
 """
 
 import hmac
@@ -17,6 +25,16 @@ from .params import json_body
 
 bp = Blueprint("webhooks", __name__, url_prefix="/api/webhooks")
 
+_TOKEN_HEADERS = ("X-Webhook-Token", "X-Telegram-Bot-Api-Secret-Token")
+
+
+def _presented_token() -> str:
+    for header in _TOKEN_HEADERS:
+        value = request.headers.get(header)
+        if value:
+            return value
+    return request.args.get("token", "")
+
 
 @bp.post("/<platform>/<int:channel_id>")
 def receive(platform: str, channel_id: int):
@@ -28,8 +46,7 @@ def receive(platform: str, channel_id: int):
     if channel["platform"] != platform:
         raise ApiError(404, "not_found", "Channel not found for this platform.")
 
-    token = request.headers.get("X-Webhook-Token", "")
-    if not hmac.compare_digest(token, channel["webhook_token"]):
+    if not hmac.compare_digest(_presented_token(), channel["webhook_token"]):
         raise ApiError(401, "unauthorized", "Invalid webhook token.")
 
     payload = json_body()

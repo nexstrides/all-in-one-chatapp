@@ -48,3 +48,19 @@ def required_str(data: dict, key: str, max_length: int | None = None) -> str:
     if max_length is not None and len(value) > max_length:
         raise ApiError(400, "invalid_field", f"'{key}' must be at most {max_length} characters.")
     return value
+
+
+def optional_str(data: dict, key: str, max_length: int | None = None) -> str | None:
+    """Like ``required_str`` but the key may be absent or null."""
+    if data.get(key) is None:
+        return None
+    return required_str(data, key, max_length=max_length)
+
+
+def required_query(name: str, max_length: int = 200) -> str:
+    value = request.args.get(name, "").strip()
+    if not value:
+        raise ApiError(400, "invalid_parameter", f"'{name}' query parameter is required.")
+    if len(value) > max_length:
+        raise ApiError(400, "invalid_parameter", f"'{name}' must be at most {max_length} characters.")
+    return value

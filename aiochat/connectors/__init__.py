@@ -4,7 +4,15 @@ To add a platform, implement ``Connector`` in a new module and register an
 instance here.
 """
 
-from .base import Connector, InboundMessage, PayloadError
+from .base import (
+    Connector,
+    DeliveryError,
+    InboundDelete,
+    InboundEdit,
+    InboundEvent,
+    InboundMessage,
+    PayloadError,
+)
 from .slack import SlackConnector
 from .telegram import TelegramConnector
 
@@ -17,4 +25,14 @@ def get_connector(platform: str) -> Connector | None:
     return CONNECTORS.get(platform)
 
 
-__all__ = ["CONNECTORS", "Connector", "InboundMessage", "PayloadError", "get_connector"]
+__all__ = [
+    "CONNECTORS",
+    "Connector",
+    "DeliveryError",
+    "InboundDelete",
+    "InboundEdit",
+    "InboundEvent",
+    "InboundMessage",
+    "PayloadError",
+    "get_connector",
+]

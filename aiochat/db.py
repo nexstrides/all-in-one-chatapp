@@ -9,6 +9,7 @@ from importlib import resources
 
 import click
 from flask import current_app, g
+from flask.cli import with_appcontext
 
 
 def get_db() -> sqlite3.Connection:
@@ -26,16 +27,39 @@ def close_db(_exc=None) -> None:
         conn.close()
 
 
+# Columns added after the first release. schema.sql includes them for new
+# databases; databases created earlier get them here via ALTER TABLE. This
+# must run before schema.sql because the script also creates indexes on them.
+_ADDED_COLUMNS = (
+    ("channels", "credential", "TEXT"),
+    ("outbox", "next_attempt_at", "TEXT"),
+    ("messages", "edited_at", "TEXT"),
+    ("messages", "deleted_at", "TEXT"),
+)
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    for table, column, declaration in _ADDED_COLUMNS:
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if existing and column not in existing:  # empty set = table not created yet
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+    conn.commit()
+
+
 def init_db() -> None:
     path = current_app.config["DATABASE"]
     directory = os.path.dirname(path)
     if directory:
         os.makedirs(directory, exist_ok=True)
     schema = resources.files("aiochat").joinpath("schema.sql").read_text()
-    get_db().executescript(schema)
+    conn = get_db()
+    _add_missing_columns(conn)
+    # One transaction instead of an fsync per statement.
+    conn.executescript(f"BEGIN;\n{schema}\nCOMMIT;")
 
 
 @click.command("init-db")
+@with_appcontext
 def init_db_command() -> None:
     """Create tables if they do not exist."""
     init_db()

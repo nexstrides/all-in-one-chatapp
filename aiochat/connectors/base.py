@@ -1,13 +1,16 @@
 """Connector interface.
 
 A connector turns one platform's webhook payload into a list of normalized
-``InboundMessage`` objects. Connectors are pure: no database, no network.
+inbound events (new messages, edits, deletions), and sends replies back
+through the platform's API. Connectors never touch the database; the only network access is in
+``send`` (through ``connectors.http``).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Union
 
 
 @dataclass(frozen=True)
@@ -21,8 +24,43 @@ class InboundMessage:
     sent_at: str  # ISO 8601 UTC, e.g. 2026-10-26T21:00:00.000Z
 
 
+@dataclass(frozen=True)
+class InboundEdit:
+    """The text of an existing message changed."""
+
+    external_conversation_id: str
+    external_message_id: str
+    body: str
+    edited_at: str
+
+
+@dataclass(frozen=True)
+class InboundDelete:
+    """An existing message was removed on the platform."""
+
+    external_conversation_id: str
+    external_message_id: str
+    deleted_at: str
+
+
+InboundEvent = Union[InboundMessage, InboundEdit, InboundDelete]
+
+
 class PayloadError(ValueError):
     """The payload is malformed for this platform."""
+
+
+class DeliveryError(Exception):
+    """Sending a message failed.
+
+    ``retryable`` is True for transient problems (network, rate limits, 5xx)
+    and False for things that will not fix themselves (bad token, unknown
+    chat). Messages must never contain credentials.
+    """
+
+    def __init__(self, message: str, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class Connector:
@@ -36,8 +74,18 @@ class Connector:
         """
         return None
 
-    def parse(self, payload: dict) -> list[InboundMessage]:
-        """Return the messages in ``payload``; an empty list means 'ignore'."""
+    def parse(self, payload: dict) -> list[InboundEvent]:
+        """Return the events in ``payload``; an empty list means 'ignore'."""
+        raise NotImplementedError
+
+    def send(
+        self, credential: str, external_conversation_id: str, body: str, timeout: float = 10
+    ) -> str:
+        """Deliver ``body`` to a conversation and return the platform's message id.
+
+        ``credential`` is the channel's API token. Raise ``DeliveryError`` on
+        failure.
+        """
         raise NotImplementedError
 
 

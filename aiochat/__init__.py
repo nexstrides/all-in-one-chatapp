@@ -6,6 +6,7 @@ from . import db
 from .api import register_blueprints
 from .config import Config
 from .errors import register_error_handlers
+from .worker import deliver_outbox_command, purge_deleted_command
 
 
 def create_app(test_config: dict | None = None) -> Flask:
@@ -17,6 +18,8 @@ def create_app(test_config: dict | None = None) -> Flask:
     db.init_app(app)
     register_error_handlers(app)
     register_blueprints(app)
+    app.cli.add_command(deliver_outbox_command)
+    app.cli.add_command(purge_deleted_command)
 
     @app.get("/health")
     def health():

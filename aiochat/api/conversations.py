@@ -1,10 +1,11 @@
 """/api/conversations — the unified inbox seen by the client."""
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from ..auth import require_api_token
 from ..errors import ApiError
 from ..services import inbox
+from ..worker import wake_outbox_worker
 from .params import flag, json_body, optional_int, pagination, required_str
 
 bp = Blueprint("conversations", __name__, url_prefix="/api/conversations")
@@ -34,14 +35,18 @@ def get_conversation(conversation_id: int):
 @bp.get("/<int:conversation_id>/messages")
 def list_messages(conversation_id: int):
     page, page_size = pagination()
-    return jsonify(inbox.list_messages(conversation_id, page, page_size))
+    return jsonify(
+        inbox.list_messages(conversation_id, page, page_size, include_deleted=flag("include_deleted"))
+    )
 
 
 @bp.post("/<int:conversation_id>/messages")
 def send_reply(conversation_id: int):
     data = json_body()
     body = required_str(data, "body", max_length=MAX_REPLY_LENGTH)
-    return jsonify(inbox.reply(conversation_id, body)), 201
+    message = inbox.reply(conversation_id, body)
+    wake_outbox_worker(current_app)
+    return jsonify(message), 201
 
 
 @bp.post("/<int:conversation_id>/read")
