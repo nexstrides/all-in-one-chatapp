@@ -49,12 +49,15 @@ def telegram_update(update_id, chat_id, user_id, first, last, text, offset):
 SLACK = [
     slack_event("C-GENERAL", "general", "U-MIA", "Mia", "Morning! Standup in 10?", 0),
     slack_event("C-GENERAL", "general", "U-OMAR", "Omar", "Running 5 late, start without me", 60),
+    slack_event("C-GENERAL", "general", "U-OMAR", "Omar", "I'll miss standup tomorrow, flying out early", 90),
     slack_event("C-SUPPORT", "support", "U-LENA", "Lena", "Customer says exports are empty", 300),
 ]
 
+# Mia is on both platforms, under a different display name on each.
 TELEGRAM = [
     telegram_update(1, 9001, 9001, "Sam", "Rivera", "Hey, are we still on for Friday?", 120),
     telegram_update(2, 9001, 9001, "Sam", "Rivera", "I can bring the projector", 180),
+    telegram_update(3, 9002, 9002, "Mia", "Park", "Can you send me the standup notes?", 240),
 ]
 
 
