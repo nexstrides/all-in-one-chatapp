@@ -157,6 +157,32 @@ class SearchFilterTests(SearchTestCase):
         self.assertEqual([m["conversation"]["platform"] for m in result["items"]], ["telegram", "slack"])
         self.assertEqual(self.api("GET", "/api/messages?q=budget&person_id=999").status_code, 404)
 
+    def test_channel(self):
+        self.assertEqual(self.bodies(f"q=budget&channel_id={self.slack['id']}"), ["budget is tight", "budget review"])
+        self.assertEqual(self.bodies(f"q=budget&channel_id={self.telegram['id']}"), ["budget sent", "budget notes?"])
+        # Like channel_id on /api/conversations: an unknown channel is an empty result, not a 404.
+        result = self.search("q=budget&channel_id=999")
+        self.assertEqual((result["total"], result["items"]), (0, []))
+        for bad in ("0", "-1", "abc"):
+            resp = self.api("GET", f"/api/messages?q=budget&channel_id={bad}")
+            self.assertEqual(resp.status_code, 400, bad)
+            self.assertEqual(resp.get_json()["error"]["code"], "invalid_parameter")
+
+    def test_channel_distinguishes_accounts_on_the_same_platform(self):
+        other_slack = self.create_channel("slack", "Other workspace", "T2")
+        self.webhook(other_slack, slack_message(channel="C9", user="U-ZOE", text="budget from T2", ts="1761500300.000100"))
+        self.assertEqual(self.bodies(f"q=budget&channel_id={other_slack['id']}"), ["budget from T2"])
+        self.assertEqual(self.bodies(f"q=budget&channel_id={self.slack['id']}"), ["budget is tight", "budget review"])
+        self.assertEqual(self.search("q=budget&platform=slack")["total"], 3, "platform spans both workspaces")
+
+    def test_channel_combines_with_platform_and_person(self):
+        # Agreeing filters narrow; contradicting ones yield nothing.
+        self.assertEqual(self.bodies(f"q=budget&channel_id={self.slack['id']}&platform=slack"), ["budget is tight", "budget review"])
+        self.assertEqual(self.search(f"q=budget&channel_id={self.slack['id']}&platform=telegram")["total"], 0)
+        self.assertEqual(self.bodies(f"q=budget&channel_id={self.slack['id']}&person_id={self.person['id']}"), ["budget review"])
+        self.assertEqual(self.bodies(f"q=bud&match=prefix&channel_id={self.telegram['id']}&since=2025-10-26&until=2025-10-26"),
+                         ["budget notes?"])
+
     def test_platform(self):
         self.assertEqual(self.bodies("q=budget&platform=slack"), ["budget is tight", "budget review"])
         self.assertEqual(self.bodies("q=budget&platform=Telegram"), ["budget sent", "budget notes?"])

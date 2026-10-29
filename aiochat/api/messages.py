@@ -21,6 +21,7 @@ def search():
             page_size,
             match=request.args.get("match", DEFAULT_MODE).strip().lower(),
             person_id=optional_int("person_id"),
+            channel_id=optional_int("channel_id"),
             platform=request.args.get("platform", "").strip().lower() or None,
             since=optional_time_bound("since"),
             until=optional_time_bound("until", end=True),

@@ -363,6 +363,7 @@ def search_messages(
     page_size: int,
     match: str = DEFAULT_MODE,
     person_id: int | None = None,
+    channel_id: int | None = None,
     platform: str | None = None,
     since: str | None = None,
     until: str | None = None,
@@ -372,8 +373,9 @@ def search_messages(
     Every word of ``query`` must occur in the message (any order); ``match``
     is ``word`` (whole words, the default) or ``prefix``, see textmatch.py.
     ``person_id`` keeps messages written by that person's contacts;
-    ``since``/``until`` are inclusive bounds on ``sent_at`` in the stored ISO
-    format (the API layer normalizes user input).
+    ``channel_id`` behaves like it does on conversations (an unknown id just
+    matches nothing); ``since``/``until`` are inclusive bounds on ``sent_at``
+    in the stored ISO format (the API layer normalizes user input).
     """
     if match not in MODES:
         raise ApiError(400, "invalid_parameter", f"'match' must be one of: {', '.join(MODES)}.")
@@ -395,6 +397,9 @@ def search_messages(
         get_person_row(person_id)
         where.append("m.contact_id IN (SELECT id FROM contacts WHERE person_id = ?)")
         params.append(person_id)
+    if channel_id is not None:
+        where.append("c.channel_id = ?")
+        params.append(channel_id)
     if platform is not None:
         where.append("ch.platform = ?")
         params.append(platform)

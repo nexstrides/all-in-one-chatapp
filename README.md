@@ -199,7 +199,8 @@ Filters, all optional and combinable:
 | Parameter | Keeps messages... |
 | --- | --- |
 | `person_id` | written by that person's contacts (404 if the person does not exist) |
-| `platform` | from channels on that platform (`slack`, `telegram`) |
+| `channel_id` | in one connected account, as on `/api/conversations` (an unknown id matches nothing) |
+| `platform` | from channels on that platform (`slack`, `telegram`), i.e. every account there |
 | `since` | sent at or after this time |
 | `until` | sent at or before this time |
 
@@ -282,7 +283,7 @@ set to `null`.
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` | `/api/messages?q=` | Full-text search across all conversations, every word must match, newest first (see [Search](#search)). Each hit includes `conversation: {id, title, platform}`. Query: `match` (`word`, `prefix`), `person_id`, `platform`, `since`, `until`, `page`, `page_size`. The response echoes `query` and `match` |
+| `GET` | `/api/messages?q=` | Full-text search across all conversations, every word must match, newest first (see [Search](#search)). Each hit includes `conversation: {id, title, platform}`. Query: `match` (`word`, `prefix`), `person_id`, `channel_id`, `platform`, `since`, `until`, `page`, `page_size`. The response echoes `query` and `match` |
 
 ### People and contacts
 
