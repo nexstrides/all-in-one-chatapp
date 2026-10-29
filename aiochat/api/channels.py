@@ -1,4 +1,4 @@
-"""/api/channels — connect and disconnect external accounts."""
+"""/api/channels: connect and disconnect external accounts."""
 
 from flask import Blueprint, jsonify
 

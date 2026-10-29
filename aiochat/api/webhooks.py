@@ -1,14 +1,14 @@
-"""/api/webhooks — inbound events from external platforms.
+"""/api/webhooks: inbound events from external platforms.
 
 Each channel gets its own URL, ``/api/webhooks/<platform>/<channel_id>``, and
 every call must carry the channel's webhook token. Platforms differ in how
 they can present it, so three places are accepted:
 
-* ``?token=...`` in the URL — Slack's Events API only lets you configure a
+* ``?token=...`` in the URL: Slack's Events API only lets you configure a
   URL, so the token rides along in the query string.
-* ``X-Telegram-Bot-Api-Secret-Token`` header — what Telegram sends when the
+* ``X-Telegram-Bot-Api-Secret-Token`` header: what Telegram sends when the
   webhook was registered with ``secret_token``.
-* ``X-Webhook-Token`` header — for anything else (tests, curl).
+* ``X-Webhook-Token`` header: for anything else (tests, curl).
 
 These routes do not use the client API token.
 """

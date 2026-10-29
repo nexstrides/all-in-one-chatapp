@@ -1,4 +1,4 @@
-"""/api/contacts — the accounts seen on each channel, for grouping into people."""
+"""/api/contacts: the accounts seen on each channel, for grouping into people."""
 
 from flask import Blueprint, jsonify
 

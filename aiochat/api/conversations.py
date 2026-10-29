@@ -1,4 +1,4 @@
-"""/api/conversations — the unified inbox seen by the client."""
+"""/api/conversations: the unified inbox seen by the client."""
 
 from flask import Blueprint, current_app, jsonify, request
 

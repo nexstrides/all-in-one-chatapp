@@ -1,4 +1,4 @@
-"""/api/outbox — delivery status of replies, and manual control."""
+"""/api/outbox: delivery status of replies, and manual control."""
 
 from flask import Blueprint, jsonify, request
 

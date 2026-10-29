@@ -1,4 +1,4 @@
-"""/api/messages — search across every conversation."""
+"""/api/messages: search across every conversation."""
 
 from flask import Blueprint, jsonify, request
 

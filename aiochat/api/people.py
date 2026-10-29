@@ -1,4 +1,4 @@
-"""/api/people — group a person's accounts across platforms by hand."""
+"""/api/people: group a person's accounts across platforms by hand."""
 
 from flask import Blueprint, jsonify
 

@@ -139,7 +139,7 @@ A *contact* is one account on one channel: a Slack user in a workspace, a
 Telegram user as seen by a bot. The same human therefore shows up once per
 platform. A *person* is a group of contacts you create by hand to say "these
 are all the same human"; nothing is grouped automatically (see
-[Suggesting matches](#suggesting-matches) for why).
+[Why grouping is manual](#why-grouping-is-manual)).
 
 ```bash
 # find the accounts
@@ -311,7 +311,7 @@ set to `null`.
 ## Known gaps
 
 - Grouping contacts into people is manual; the app does not propose matches
-  (see below).
+  (see [Why grouping is manual](#why-grouping-is-manual)).
 - Slack channel titles are the raw channel id (events don't carry names); DMs use the sender's name.
 - Replies are plain text only; no attachments or threads, and replies cannot be edited or deleted from here.
 - Telegram gives bots no deletion events, so messages deleted in Telegram stay in the inbox.
@@ -322,39 +322,22 @@ set to `null`.
 - Discord is planned; it receives events over a gateway websocket rather than
   webhooks, so it will need a small long-running client in addition to a connector.
 
-## Suggesting matches
+## Why grouping is manual
 
-Should the app propose that two contacts may be the same person, instead of
-leaving the grouping entirely to the user? **Recommendation: not yet, and
-when it comes, as dismissable hints from exact identifiers only, never
-automatic grouping.** The reasoning:
+The app doesn't group contacts on its own and doesn't suggest matches yet.
+Webhooks only give us display names, and those are a weak signal: different
+people share them ("Sam", "Alex"), and one person often uses different ones
+(in the seed data Mia is "Mia" on Slack and "Mia Park" on Telegram). Emails
+or phone numbers would be better, but getting them needs extra API scopes
+and calls we don't make today.
 
-- **The signals we have are weak.** Webhook events only carry display
-  names: Slack sends `display_name`/`real_name`, Telegram a first and last
-  name and maybe a username. Names collide ("Sam", "Alex") and differ across
-  platforms for the same human (the seed data's "Mia" on Slack is "Mia
-  Park" on Telegram, and the seed deliberately leaves them ungrouped). Anything stronger, such as an e-mail from Slack's
-  `users.info` or a phone number from a Telegram `contact` share, needs
-  extra scopes and API calls that the inbox does not make today.
-- **The two kinds of mistake are not symmetric.** A missed match costs the
-  user one manual link. A wrong match merges two strangers into one
-  person: their unread count, conversation list and timeline become
-  misleading, and in a shared inbox it could expose one contact's context
-  next to another's. A suggestion that is wrong 20% of the time would
-  also teach users to ignore it.
-- **Manual grouping is already cheap at this scale.** A personal inbox has
-  tens to a few hundred contacts. `GET /api/contacts?q=mia` sorted by name
-  puts likely duplicates next to each other, which is most of what a
-  name-based suggester would do, with the user's judgement in the loop.
-- **Names are personal data.** Matching on them is a reasonable thing to
-  do, but doing it silently and persistently (storing "we think these are
-  the same") is a decision the user should make, not the app.
+Getting it wrong is also worse than missing a match. A missed match costs
+one manual link; a wrong one mixes two people's unread counts and timelines.
+And with a few hundred contacts, `GET /api/contacts?q=mia` already lists
+likely duplicates next to each other.
 
-If usage shows people repeatedly grouping the same kind of pair, the
-cheapest useful version is a `GET /api/people/suggestions` endpoint that
-returns pairs of *ungrouped* contacts on *different* platforms whose
-normalized display names (case-folded, punctuation stripped) are exactly
-equal, with a way to dismiss a pair so it is not shown again. It should
-stay suggestions-only: the link still goes through `POST /api/people`.
-Fuzzy name matching, message-content analysis or automatic grouping are
-not worth the false positives for this app.
+If it turns out people need help here, the plan is a small
+`GET /api/people/suggestions` endpoint: pairs of ungrouped contacts on
+different platforms whose names match exactly (ignoring case and
+punctuation), with a way to dismiss a pair. Linking would still go through
+`POST /api/people`. No fuzzy matching and no automatic grouping.
