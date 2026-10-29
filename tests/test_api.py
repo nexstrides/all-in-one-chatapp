@@ -270,11 +270,14 @@ class InboxTests(AppTestCase):
         paged = self.api("GET", "/api/messages?q=budget&page_size=2&page=2").get_json()
         self.assertEqual(len(paged["items"]), 1)
 
-    def test_search_escapes_like_wildcards(self):
+    def test_search_is_by_word(self):
         self.send_webhook(self.telegram, telegram_message(text="100% done", date=1761500000))
         self.send_webhook(self.telegram, telegram_message(message_id=2, text="100 done", date=1761500001))
-        self.assertEqual(self.api("GET", "/api/messages?q=100%25").get_json()["total"], 1)
+        self.send_webhook(self.telegram, telegram_message(message_id=3, text="1000 done", date=1761500002))
+        self.assertEqual(self.api("GET", "/api/messages?q=100").get_json()["total"], 2)
+        self.assertEqual(self.api("GET", "/api/messages?q=100%25").get_json()["total"], 2, "punctuation is not a word")
         self.assertEqual(self.api("GET", "/api/messages?q=_").get_json()["total"], 0)
+        self.assertEqual(self.api("GET", "/api/messages?q=done%20100").get_json()["total"], 2, "any order")
 
     def test_search_requires_query(self):
         self.assertEqual(self.api("GET", "/api/messages").status_code, 400)

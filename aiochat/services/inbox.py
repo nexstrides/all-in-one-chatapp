@@ -11,7 +11,7 @@ from ..connectors import CONNECTORS, InboundDelete, InboundEdit, InboundEvent, I
 from ..connectors.base import iso_utc
 from ..db import get_db
 from ..errors import ApiError
-from ..textmatch import DEFAULT_MODE, MODES, like_pattern
+from ..textmatch import DEFAULT_MODE, MODES, fts_query
 from .people import get_person_row
 
 
@@ -367,14 +367,13 @@ def search_messages(
     since: str | None = None,
     until: str | None = None,
 ) -> dict:
-    """Case-insensitive search over all messages, newest first.
+    """Full-text search over all messages, newest first.
 
-    ``match`` is ``substring`` (default), ``word`` or ``prefix``; see
-    textmatch.py. ``person_id`` keeps messages written by that person's
-    contacts; ``since``/``until`` are inclusive bounds on ``sent_at`` in the
-    stored ISO format (the API layer normalizes user input).
-
-    Plain LIKE is plenty for a personal inbox; swap in FTS5 if it ever isn't.
+    Every word of ``query`` must occur in the message (any order); ``match``
+    is ``word`` (whole words, the default) or ``prefix``, see textmatch.py.
+    ``person_id`` keeps messages written by that person's contacts;
+    ``since``/``until`` are inclusive bounds on ``sent_at`` in the stored ISO
+    format (the API layer normalizes user input).
     """
     if match not in MODES:
         raise ApiError(400, "invalid_parameter", f"'match' must be one of: {', '.join(MODES)}.")
@@ -382,13 +381,16 @@ def search_messages(
         supported = ", ".join(sorted(CONNECTORS))
         raise ApiError(400, "invalid_parameter", f"'platform' must be one of: {supported}.")
 
-    # The LIKE prefilter applies in every mode, so word/prefix results are
-    # always a subset of the substring results for the same query.
-    where = ["m.deleted_at IS NULL", "m.body LIKE ? ESCAPE '\\'"]
-    params: list = [like_pattern(query)]
-    if match != "substring":
-        where.append("aiochat_match(?, ?, m.body)")
-        params += [match, query]
+    expression = fts_query(query, match)
+    if expression is None:  # nothing but punctuation: no word can match
+        return {"items": [], "page": page, "page_size": page_size, "total": 0,
+                "query": query, "match": match}
+
+    where = [
+        "m.id IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)",
+        "m.deleted_at IS NULL",
+    ]
+    params: list = [expression]
     if person_id is not None:
         get_person_row(person_id)
         where.append("m.contact_id IN (SELECT id FROM contacts WHERE person_id = ?)")

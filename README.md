@@ -9,7 +9,9 @@ belong to the same human can be grouped into a *person*, which gives one
 unread count and one timeline across platforms.
 
 This repo is the backend only: Flask, SQLite and the standard library.
-Requires Python 3.10+. Flask is the only third-party dependency.
+Requires Python 3.10+ whose SQLite includes FTS5 (python.org, Debian/Ubuntu,
+Homebrew and conda builds all do; the app refuses to start otherwise). Flask
+is the only third-party dependency.
 
 ## Quick start
 
@@ -174,21 +176,23 @@ ungrouped.
 
 ## Search
 
-`GET /api/messages?q=` searches the text of every non-deleted message,
-newest first. The query is matched as a literal phrase, case-insensitively;
-`match` picks how strictly:
+`GET /api/messages?q=` is a full-text search over every non-deleted message,
+newest first, backed by an SQLite FTS5 index that is kept in step with the
+`messages` table by triggers. It matches **words**, not substrings: every
+word of the query must occur in the message, in any order, so
+`notes standup` finds "Can you send me the standup notes?". Case and accents
+are folded (`cafe` finds `café`), and punctuation is not part of a word
+(`c++` is the word `c`; `budget-review` is the two adjacent words
+`budget review`). A query with no letters or digits matches nothing.
 
-| `match` | `q=bud` matches | `q=budget` matches |
+| `match` | `q=note stand` | `q=budget` matches |
 | --- | --- | --- |
-| `substring` (default) | `bud`, `budget`, `rebudget` | `budget`, `budgets`, `rebudget` |
-| `prefix` | `bud`, `budget` | `budget`, `budgets` |
-| `word` | `bud` | `budget`, `budget!`, `(budget)` |
+| `word` (default) | nothing: neither is a whole word | `budget`, `Budget!`, `(budget)`; not `budgets` |
+| `prefix` | "the standup notes" | also `budgets`, `budgeting`; not `rebudget` |
 
-Word boundaries are where a word character (letter, digit or `_`) meets
-anything else, so `word` and `prefix` work with punctuation in the query
-(`c++`, `@mia`) and with phrases (`budget review`). The stricter modes are
-applied on top of the substring match, so their results are always a
-subset of it.
+Nothing typed by the user is FTS5 syntax: `OR`, `NOT`, `*`, quotes and
+`column:` are ordinary words or ignored. There are no phrase queries or
+relevance ranking yet; results are in time order like the rest of the inbox.
 
 Filters, all optional and combinable:
 
@@ -203,16 +207,20 @@ Filters, all optional and combinable:
 (`2025-10-26T17:30:00Z`, `2025-10-26T18:30:00+01:00`; no offset means UTC).
 A bare date covers that whole UTC day, so `since=D&until=D` is one day.
 
+Databases from before full-text search get the index built on first start
+(about a second per 200k messages). If you ever change `messages` by hand,
+`flask --app run reindex-search` rebuilds it.
+
 ## Layout
 
 ```
 aiochat/
   __init__.py        app factory
   config.py          settings from environment variables
-  db.py, schema.sql  SQLite connection, schema and column migrations
+  db.py, schema.sql  SQLite connection, schema, column migrations, FTS5 index upkeep
   auth.py            bearer-token check for the client API
   errors.py          ApiError and JSON error responses
-  textmatch.py       whole-word / prefix matching for search (SQLite function)
+  textmatch.py       turns search text into a safe FTS5 MATCH expression
   worker.py          outbox delivery thread, `deliver-outbox` and `purge-deleted` CLI
   connectors/        one module per platform: webhook payload -> InboundMessage,
                      and send() for replies; http.py is the stdlib HTTP client
@@ -274,7 +282,7 @@ set to `null`.
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` | `/api/messages?q=` | Case-insensitive search across all conversations, newest first (see [Search](#search)). Each hit includes `conversation: {id, title, platform}`. Query: `match` (`substring`, `word`, `prefix`), `person_id`, `platform`, `since`, `until`, `page`, `page_size`. The response echoes `query` and `match` |
+| `GET` | `/api/messages?q=` | Full-text search across all conversations, every word must match, newest first (see [Search](#search)). Each hit includes `conversation: {id, title, platform}`. Query: `match` (`word`, `prefix`), `person_id`, `platform`, `since`, `until`, `page`, `page_size`. The response echoes `query` and `match` |
 
 ### People and contacts
 
@@ -306,10 +314,9 @@ set to `null`.
 - Slack channel titles are the raw channel id (events don't carry names); DMs use the sender's name.
 - Replies are plain text only; no attachments or threads, and replies cannot be edited or deleted from here.
 - Telegram gives bots no deletion events, so messages deleted in Telegram stay in the inbox.
-- Search is a `LIKE` scan (plus a Python word-boundary check for `word` and
-  `prefix`), fine for a personal inbox; switch to FTS5 if it grows.
-- Search and the `word`/`prefix` modes are case-insensitive for ASCII only,
-  the same as SQLite's `LIKE`.
+- Search has no stemming (`note` does not find `notes`; use `match=prefix`),
+  no phrase queries, and no relevance ranking; FTS5 supports all three if
+  wanted. Substring search was dropped with the move to FTS5.
 - List endpoints use page/offset pagination.
 - Discord is planned; it receives events over a gateway websocket rather than
   webhooks, so it will need a small long-running client in addition to a connector.

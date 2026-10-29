@@ -1,56 +1,35 @@
-"""Search: match modes (substring, whole word, prefix) and the person,
-platform and date filters. Plain substring search is covered in test_api."""
+"""Full-text search: word and prefix matching, the person, platform and date
+filters, and keeping the FTS5 index in step with the messages table."""
 
 import unittest
 
 from aiochat import textmatch
-from tests.helpers import AppTestCase, slack_message, telegram_message
+from aiochat.db import get_db
+from tests.helpers import AppTestCase, slack_changed, slack_deleted, slack_message, telegram_message
 
 
-class TextMatchTests(unittest.TestCase):
-    def test_substring(self):
-        self.assertTrue(textmatch.matches("substring", "budget", "rebudgeting"))
-        self.assertTrue(textmatch.matches("substring", "BUDGET", "the budget"))
-        self.assertFalse(textmatch.matches("substring", "budget", "bud get"))
+class FtsQueryTests(unittest.TestCase):
+    def test_words(self):
+        self.assertEqual(textmatch.words("  notes   standup "), ["notes", "standup"])
+        self.assertEqual(textmatch.words("c++ @mia 100%"), ["c++", "@mia", "100%"])
+        self.assertEqual(textmatch.words("_ % ... \"\""), [], "no letters or digits, no words")
 
-    def test_word(self):
-        m = lambda body: textmatch.matches("word", "budget", body)
-        self.assertTrue(m("the budget!"))
-        self.assertTrue(m("Budget"))
-        self.assertTrue(m("(budget)"))
-        self.assertFalse(m("budgets"))
-        self.assertFalse(m("rebudget"))
-        self.assertFalse(m("budget_v2"), "underscore is a word character")
-        self.assertTrue(textmatch.matches("word", "budget review", "the budget review is on"))
-        self.assertFalse(textmatch.matches("word", "budget review", "the budget reviews"))
+    def test_word_mode_quotes_every_term(self):
+        self.assertEqual(textmatch.fts_query("notes standup"), '"notes" "standup"')
+        self.assertEqual(textmatch.fts_query("Budget", "word"), '"Budget"')
 
-    def test_prefix(self):
-        m = lambda body: textmatch.matches("prefix", "bud", body)
-        self.assertTrue(m("budget"))
-        self.assertTrue(m("a bud"))
-        self.assertFalse(m("rebudget"))
-        self.assertTrue(textmatch.matches("prefix", "budget rev", "budget review"))
+    def test_prefix_mode_marks_every_term(self):
+        self.assertEqual(textmatch.fts_query("note stand", "prefix"), '"note"* "stand"*')
 
-    def test_punctuation_in_query(self):
-        # Lookarounds instead of \b: punctuation at the edges of the query
-        # must not demand a word character next to it.
-        self.assertTrue(textmatch.matches("word", "c++", "I like c++ a lot"))
-        self.assertTrue(textmatch.matches("word", "c++", "c++"))
-        self.assertFalse(textmatch.matches("word", "c++", "c++11"))
-        self.assertTrue(textmatch.matches("word", "@mia", "cc @mia"))
-        self.assertFalse(textmatch.matches("word", "@mia", "x@mia"))
-        self.assertTrue(textmatch.matches("prefix", "$1", "$100"))
-        self.assertFalse(textmatch.matches("word", ".*", "anything"), "regex syntax is literal")
+    def test_operators_and_quotes_are_literal(self):
+        # FTS5 syntax typed by the user must not be interpreted.
+        self.assertEqual(textmatch.fts_query("budget OR cats"), '"budget" "OR" "cats"')
+        self.assertEqual(textmatch.fts_query('say "hi" NOT'), '"say" """hi""" "NOT"')
+        self.assertEqual(textmatch.fts_query("a* (b)"), '"a*" "(b)"')
 
-    def test_unicode_words(self):
-        self.assertTrue(textmatch.matches("word", "café", "au café!"))
-        self.assertFalse(textmatch.matches("word", "caf", "café"))
-
-    def test_none_body_and_unknown_mode(self):
-        self.assertFalse(textmatch.matches("word", "x", None))
-        self.assertFalse(textmatch.matches("fuzzy", "x", "x"))
-        self.assertEqual(textmatch.sql_function("word", "x", "x y"), 1)
-        self.assertEqual(textmatch.sql_function("word", "x", "xy"), 0)
+    def test_no_words_means_no_query(self):
+        self.assertIsNone(textmatch.fts_query("_"))
+        self.assertIsNone(textmatch.fts_query("%%%", "prefix"))
 
 
 class SearchTestCase(AppTestCase):
@@ -75,56 +54,85 @@ class SearchTestCase(AppTestCase):
 class MatchModeTests(SearchTestCase):
     def setUp(self):
         super().setUp()
-        self.webhook(self.slack, slack_message(text="Budget review at 3", ts="1761500000.000100"))
-        self.webhook(self.slack, slack_message(text="budgets are fine", ts="1761500010.000100"))
-        self.webhook(self.slack, slack_message(text="we must rebudget", ts="1761500020.000100"))
-        self.webhook(self.slack, slack_message(text="bud, the budget!", ts="1761500030.000100"))
+        texts = [
+            "Can you send me the standup notes?",
+            "Budget review at 3",
+            "budgets are fine",
+            "we must rebudget",
+            "bud, the budget!",
+            "budget-review tomorrow",
+            "au café, c++ and @mia",
+        ]
+        for i, text in enumerate(texts):
+            self.webhook(self.slack, slack_message(text=text, ts=f"{1761500000 + i}.000100"))
 
-    def test_default_is_substring_and_echoes_match(self):
+    def test_every_word_must_match_in_any_order(self):
+        self.assertEqual(self.bodies("q=notes%20standup"), ["Can you send me the standup notes?"])
+        self.assertEqual(self.bodies("q=standup%20notes"), ["Can you send me the standup notes?"])
+        self.assertEqual(self.bodies("q=standup%20notes%20budget"), [], "one word missing is no hit")
+        self.assertEqual(self.search("q=the")["total"], 2)
+        self.assertEqual(self.bodies("q=the%20budget"), ["bud, the budget!"])
+
+    def test_default_is_whole_word(self):
         result = self.search("q=budget")
-        self.assertEqual(result["total"], 4)
-        self.assertEqual(result["match"], "substring")
-        self.assertEqual(self.search("q=budget&match=substring")["total"], 4)
-
-    def test_whole_word(self):
-        result = self.search("q=budget&match=word")
         self.assertEqual(result["match"], "word")
-        self.assertEqual([m["body"] for m in result["items"]], ["bud, the budget!", "Budget review at 3"])
-        self.assertEqual(self.bodies("q=BUDGET&match=Word"), ["bud, the budget!", "Budget review at 3"])
-        self.assertEqual(self.bodies("q=bud&match=word"), ["bud, the budget!"])
-        self.assertEqual(self.bodies("q=budget review&match=word"), ["Budget review at 3"])
-        self.assertEqual(self.bodies("q=budget rev&match=word"), [])
+        self.assertEqual(
+            [m["body"] for m in result["items"]],
+            ["budget-review tomorrow", "bud, the budget!", "Budget review at 3"],
+        )
+        self.assertEqual(self.bodies("q=note"), [], "note is not the word notes")
+        self.assertEqual(self.bodies("q=bud"), ["bud, the budget!"])
+        self.assertEqual(self.bodies("q=budget&match=word"), self.bodies("q=budget"))
 
     def test_prefix(self):
+        result = self.search("q=note%20stand&match=prefix")
+        self.assertEqual(result["match"], "prefix")
+        self.assertEqual([m["body"] for m in result["items"]], ["Can you send me the standup notes?"])
         self.assertEqual(
             self.bodies("q=bud&match=prefix"),
-            ["bud, the budget!", "budgets are fine", "Budget review at 3"],
+            ["budget-review tomorrow", "bud, the budget!", "budgets are fine", "Budget review at 3"],
         )
-        self.assertEqual(self.bodies("q=budget rev&match=prefix"), ["Budget review at 3"])
         self.assertEqual(self.bodies("q=rebud&match=prefix"), ["we must rebudget"])
+        self.assertEqual(self.bodies("q=udget&match=prefix"), [], "prefix, not substring")
 
-    def test_stricter_modes_are_subsets_of_substring(self):
-        for q in ("bud", "budget", "BUDGET!", "e"):
-            substring = set(self.bodies(f"q={q}"))
-            self.assertLessEqual(set(self.bodies(f"q={q}&match=word")), substring, q)
-            self.assertLessEqual(set(self.bodies(f"q={q}&match=prefix")), substring, q)
+    def test_case_and_accents_are_folded(self):
+        self.assertEqual(self.search("q=BUDGET%20REVIEW")["total"], 2)
+        self.assertEqual(self.bodies("q=cafe"), ["au café, c++ and @mia"])
+        self.assertEqual(self.bodies("q=CAFÉ"), ["au café, c++ and @mia"])
 
-    def test_like_wildcards_stay_literal_in_every_mode(self):
-        self.webhook(self.slack, slack_message(text="100% done", ts="1761500040.000100"))
-        self.webhook(self.slack, slack_message(text="100 done", ts="1761500050.000100"))
-        for mode in ("substring", "word", "prefix"):
-            self.assertEqual(self.bodies(f"q=100%25&match={mode}"), ["100% done"], mode)
-            self.assertEqual(self.search(f"q=_&match={mode}")["total"], 0, mode)
+    def test_punctuation_is_not_part_of_words(self):
+        # A hyphenated query is the phrase "budget review" (adjacent words).
+        self.assertEqual(self.bodies("q=budget-review"), ["budget-review tomorrow", "Budget review at 3"])
+        self.assertEqual(self.bodies("q=review-budget"), [])
+        self.assertEqual(self.bodies("q=@mia"), ["au café, c++ and @mia"])
+        self.assertEqual(self.bodies("q=c%2B%2B"), ["au café, c++ and @mia"])
+        self.assertEqual(self.bodies("q=budget!"), self.bodies("q=budget"))
 
-    def test_pagination_in_word_mode(self):
-        page2 = self.search("q=budget&match=word&page_size=1&page=2")
-        self.assertEqual(page2["total"], 2)
+    def test_query_without_words_matches_nothing(self):
+        for q in ("_", "%25", "...", "%22%22"):
+            result = self.search(f"q={q}")
+            self.assertEqual(result["total"], 0, q)
+            self.assertEqual(result["items"], [])
+            self.assertEqual(result["match"], "word")
+
+    def test_fts_syntax_in_the_query_is_literal(self):
+        self.assertEqual(self.search("q=budget%20OR%20standup")["total"], 0, "OR is just a missing word")
+        self.assertEqual(self.search("q=budget%20NOT%20review")["total"], 0)
+        self.assertEqual(self.search("q=bud*")["total"], 1, "* is not a wildcard in word mode")
+        self.assertEqual(self.search("q=%22budget%20review%22")["total"], 2, "quotes are ignored")
+        self.assertEqual(self.search("q=body:budget")["total"], 0, "column filters are not available")
+        self.assertEqual(self.search("q=(budget")["total"], 3)
+
+    def test_pagination(self):
+        page2 = self.search("q=budget&page_size=2&page=2")
+        self.assertEqual(page2["total"], 3)
         self.assertEqual([m["body"] for m in page2["items"]], ["Budget review at 3"])
 
     def test_invalid_mode(self):
-        resp = self.api("GET", "/api/messages?q=budget&match=fuzzy")
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.get_json()["error"]["code"], "invalid_parameter")
+        for mode in ("fuzzy", "substring"):
+            resp = self.api("GET", f"/api/messages?q=budget&match={mode}")
+            self.assertEqual(resp.status_code, 400, mode)
+            self.assertEqual(resp.get_json()["error"]["code"], "invalid_parameter")
 
 
 class SearchFilterTests(SearchTestCase):
@@ -183,14 +191,81 @@ class SearchFilterTests(SearchTestCase):
         self.webhook(self.slack, slack_message(user="U-MIA", text="budgets!", ts="1761500200.000100",
                                                user_profile={"display_name": "Mia"}))
         q = f"q=budget&person_id={self.person['id']}&platform=slack&since=2025-10-26&until=2025-10-26"
-        self.assertEqual(self.bodies(q), ["budgets!", "budget review"])
-        self.assertEqual(self.bodies(f"{q}&match=word"), ["budget review"])
+        self.assertEqual(self.bodies(q), ["budget review"])
         self.assertEqual(self.bodies(f"{q}&match=prefix"), ["budgets!", "budget review"])
 
     def test_hits_carry_conversation_and_sender(self):
         [hit] = self.search(f"q=review&person_id={self.person['id']}")["items"]
         self.assertEqual(hit["conversation"], {"id": hit["conversation_id"], "title": "C1", "platform": "slack"})
         self.assertEqual(hit["sender"]["display_name"], "Mia")
+
+
+class IndexSyncTests(SearchTestCase):
+    """The FTS index must follow every way a message row can change."""
+
+    def setUp(self):
+        super().setUp()
+        # Every body contains "msg", so MATCH 'msg' should list exactly the
+        # ids in the messages table whenever the index is in step.
+        self.webhook(self.slack, slack_message(channel="C1", text="msg one", ts="1761500000.000100"))
+        self.webhook(self.slack, slack_message(channel="C1", text="msg two", ts="1761500001.000100"))
+        self.webhook(self.telegram, telegram_message(message_id=1, text="msg three", date=1761500002))
+
+    def indexed_ids(self):
+        with self.app.app_context():
+            db = get_db()
+            indexed = sorted(r[0] for r in db.execute("SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'msg'"))
+            stored = sorted(r[0] for r in db.execute("SELECT id FROM messages"))
+        return indexed, stored
+
+    def assert_in_step(self):
+        indexed, stored = self.indexed_ids()
+        self.assertEqual(indexed, stored)
+
+    def test_insert_edit_and_reply(self):
+        self.assert_in_step()
+        conv_id = self.search("q=one")["items"][0]["conversation_id"]
+        self.api("POST", f"/api/conversations/{conv_id}/messages", json={"body": "msg reply"})
+        self.assertEqual(self.search("q=reply")["total"], 1)
+        self.webhook(self.slack, slack_changed(ts="1761500000.000100", text="msg uno"))
+        self.assertEqual(self.search("q=one")["total"], 0)
+        self.assertEqual(self.search("q=uno")["total"], 1)
+        self.assert_in_step()
+
+    def test_soft_delete_hides_and_purge_unindexes(self):
+        self.webhook(self.slack, slack_deleted(deleted_ts="1761500000.000100"))
+        self.assertEqual(self.search("q=one")["total"], 0, "soft-deleted messages are hidden")
+        indexed, stored = self.indexed_ids()
+        self.assertEqual(indexed, stored, "but still indexed, like the row is still stored")
+
+        from aiochat.services.inbox import purge_deleted
+        with self.app.app_context():
+            get_db().execute("UPDATE messages SET deleted_at = '2020-01-01T00:00:00.000Z' WHERE body = 'msg one'")
+            get_db().commit()
+            self.assertEqual(purge_deleted(retention_days=1), 1)
+        self.assert_in_step()
+        self.assertEqual(self.search("q=msg")["total"], 2)
+
+    def test_channel_delete_cascades_into_the_index(self):
+        self.api("DELETE", f"/api/channels/{self.slack['id']}")
+        self.assert_in_step()
+        self.assertEqual(self.bodies("q=msg"), ["msg three"])
+
+    def test_reindex_command_repairs_a_stale_index(self):
+        with self.app.app_context():
+            db = get_db()
+            db.execute("DROP TRIGGER messages_fts_insert")
+            db.execute(
+                "INSERT INTO messages (conversation_id, direction, body, sent_at)"
+                " VALUES (1, 'outbound', 'msg unindexed', '2025-10-26T18:00:00.000Z')"
+            )
+            db.commit()
+        self.assertEqual(self.search("q=unindexed")["total"], 0)
+        result = self.app.test_cli_runner().invoke(args=["reindex-search"])
+        self.assertEqual(result.exit_code, 0, result.output or repr(result.exception))
+        self.assertIn("indexed=4", result.output)
+        self.assertEqual(self.search("q=unindexed")["total"], 1)
+        self.assert_in_step()
 
 
 if __name__ == "__main__":

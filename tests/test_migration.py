@@ -109,6 +109,10 @@ class LegacyDatabaseTests(unittest.TestCase):
             self.assertLessEqual({"edited_at", "deleted_at"}, columns("messages"))
             self.assertIn("person_id", columns("contacts"))
             self.assertEqual(columns("people"), {"id", "name", "created_at"})
+            tables = {r["name"] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            self.assertIn("messages_fts", tables)
+            triggers = {r["name"] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")}
+            self.assertEqual(triggers, {"messages_fts_insert", "messages_fts_update", "messages_fts_delete"})
             self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
             # Existing rows survive and start ungrouped.
             self.assertEqual(
@@ -116,10 +120,17 @@ class LegacyDatabaseTests(unittest.TestCase):
                 [None, None],
             )
 
+    def test_existing_messages_are_indexed_on_upgrade(self):
+        app, client = self.open_app()
+        result = self.api(client, "GET", "/api/messages?q=message%20old").get_json()
+        self.assertEqual([m["body"] for m in result["items"]], ["old telegram message", "old slack message"])
+        self.assertEqual(self.api(client, "GET", "/api/messages?q=tele&match=prefix").get_json()["total"], 1)
+
     def test_opening_twice_is_idempotent(self):
         self.open_app()
         app, client = self.open_app()
         self.assertEqual(self.api(client, "GET", "/api/contacts").get_json()["total"], 2)
+        self.assertEqual(self.api(client, "GET", "/api/messages?q=old").get_json()["total"], 2)
 
     def test_old_contacts_can_be_grouped(self):
         app, client = self.open_app()
