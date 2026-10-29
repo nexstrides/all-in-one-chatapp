@@ -7,14 +7,16 @@ from datetime import datetime, timedelta, timezone
 
 from flask import current_app
 
-from ..connectors import InboundDelete, InboundEdit, InboundEvent, InboundMessage
+from ..connectors import CONNECTORS, InboundDelete, InboundEdit, InboundEvent, InboundMessage
+from ..connectors.base import iso_utc
 from ..db import get_db
 from ..errors import ApiError
+from ..textmatch import DEFAULT_MODE, MODES, like_pattern
+from .people import get_person_row
 
 
 def utc_now_iso() -> str:
-    dt = datetime.now(timezone.utc)
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+    return iso_utc(datetime.now(timezone.utc))
 
 
 # --------------------------------------------------------------------------
@@ -153,8 +155,7 @@ def purge_deleted(retention_days: int | None = None) -> int:
         retention_days = current_app.config["DELETED_RETENTION_DAYS"]
     if retention_days <= 0:
         return 0
-    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
-    cutoff_iso = cutoff.strftime("%Y-%m-%dT%H:%M:%S.") + f"{cutoff.microsecond // 1000:03d}Z"
+    cutoff_iso = iso_utc(datetime.now(timezone.utc) - timedelta(days=retention_days))
     db = get_db()
     cur = db.execute(
         "DELETE FROM messages WHERE deleted_at IS NOT NULL AND deleted_at < ?", (cutoff_iso,)
@@ -205,11 +206,21 @@ def list_conversations(
     page_size: int,
     channel_id: int | None = None,
     unread_only: bool = False,
+    person_id: int | None = None,
 ) -> dict:
+    """``person_id`` keeps conversations in which one of that person's
+    contacts has written at least one (non-deleted) message."""
     where, params = [], []
     if channel_id is not None:
         where.append("c.channel_id = ?")
         params.append(channel_id)
+    if person_id is not None:
+        get_person_row(person_id)
+        where.append(
+            "EXISTS (SELECT 1 FROM messages m JOIN contacts ct ON ct.id = m.contact_id"
+            " WHERE m.conversation_id = c.id AND ct.person_id = ? AND m.deleted_at IS NULL)"
+        )
+        params.append(person_id)
     if unread_only:
         where.append(
             "EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id"
@@ -298,45 +309,117 @@ def list_messages(
     }
 
 
-def _like_pattern(query: str) -> str:
-    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
+# Messages with their conversation's title and platform, for listings that
+# span conversations (search, a person's timeline).
+_MESSAGE_WITH_CONVERSATION_SELECT = """
+SELECT m.*, ct.display_name, o.status AS delivery_status, o.last_error AS delivery_error,
+       c.title AS conversation_title, ch.platform
+FROM messages m
+JOIN conversations c ON c.id = m.conversation_id
+JOIN channels ch ON ch.id = c.channel_id
+LEFT JOIN contacts ct ON ct.id = m.contact_id
+LEFT JOIN outbox o ON o.message_id = m.id
+"""
+
+_MESSAGE_WITH_CONVERSATION_COUNT = """
+SELECT COUNT(*)
+FROM messages m
+JOIN conversations c ON c.id = m.conversation_id
+JOIN channels ch ON ch.id = c.channel_id
+"""
 
 
-def search_messages(query: str, page: int, page_size: int) -> dict:
-    """Case-insensitive substring search over all messages, newest first.
+def _message_with_conversation_to_dict(row: sqlite3.Row) -> dict:
+    item = _message_to_dict(row)
+    item["conversation"] = {
+        "id": row["conversation_id"],
+        "title": row["conversation_title"],
+        "platform": row["platform"],
+    }
+    return item
+
+
+def _messages_across_conversations(where: list[str], params: list, page: int, page_size: int) -> dict:
+    db = get_db()
+    where_sql = " WHERE " + " AND ".join(where)
+    total = db.execute(f"{_MESSAGE_WITH_CONVERSATION_COUNT}{where_sql}", params).fetchone()[0]
+    rows = db.execute(
+        f"{_MESSAGE_WITH_CONVERSATION_SELECT}{where_sql}"
+        " ORDER BY m.sent_at DESC, m.id DESC"
+        " LIMIT ? OFFSET ?",
+        [*params, page_size, (page - 1) * page_size],
+    ).fetchall()
+    return {
+        "items": [_message_with_conversation_to_dict(r) for r in rows],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+    }
+
+
+def search_messages(
+    query: str,
+    page: int,
+    page_size: int,
+    match: str = DEFAULT_MODE,
+    person_id: int | None = None,
+    platform: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> dict:
+    """Case-insensitive search over all messages, newest first.
+
+    ``match`` is ``substring`` (default), ``word`` or ``prefix``; see
+    textmatch.py. ``person_id`` keeps messages written by that person's
+    contacts; ``since``/``until`` are inclusive bounds on ``sent_at`` in the
+    stored ISO format (the API layer normalizes user input).
 
     Plain LIKE is plenty for a personal inbox; swap in FTS5 if it ever isn't.
     """
-    pattern = _like_pattern(query)
-    db = get_db()
-    total = db.execute(
-        "SELECT COUNT(*) FROM messages WHERE body LIKE ? ESCAPE '\\' AND deleted_at IS NULL",
-        (pattern,),
-    ).fetchone()[0]
-    rows = db.execute(
-        "SELECT m.*, ct.display_name, o.status AS delivery_status, o.last_error AS delivery_error,"
-        "       c.title AS conversation_title, ch.platform"
-        " FROM messages m"
-        " JOIN conversations c ON c.id = m.conversation_id"
-        " JOIN channels ch ON ch.id = c.channel_id"
-        " LEFT JOIN contacts ct ON ct.id = m.contact_id"
-        " LEFT JOIN outbox o ON o.message_id = m.id"
-        " WHERE m.body LIKE ? ESCAPE '\\' AND m.deleted_at IS NULL"
-        " ORDER BY m.sent_at DESC, m.id DESC"
-        " LIMIT ? OFFSET ?",
-        (pattern, page_size, (page - 1) * page_size),
-    ).fetchall()
-    items = []
-    for row in rows:
-        item = _message_to_dict(row)
-        item["conversation"] = {
-            "id": row["conversation_id"],
-            "title": row["conversation_title"],
-            "platform": row["platform"],
-        }
-        items.append(item)
-    return {"items": items, "page": page, "page_size": page_size, "total": total, "query": query}
+    if match not in MODES:
+        raise ApiError(400, "invalid_parameter", f"'match' must be one of: {', '.join(MODES)}.")
+    if platform is not None and platform not in CONNECTORS:
+        supported = ", ".join(sorted(CONNECTORS))
+        raise ApiError(400, "invalid_parameter", f"'platform' must be one of: {supported}.")
+
+    # The LIKE prefilter applies in every mode, so word/prefix results are
+    # always a subset of the substring results for the same query.
+    where = ["m.deleted_at IS NULL", "m.body LIKE ? ESCAPE '\\'"]
+    params: list = [like_pattern(query)]
+    if match != "substring":
+        where.append("aiochat_match(?, ?, m.body)")
+        params += [match, query]
+    if person_id is not None:
+        get_person_row(person_id)
+        where.append("m.contact_id IN (SELECT id FROM contacts WHERE person_id = ?)")
+        params.append(person_id)
+    if platform is not None:
+        where.append("ch.platform = ?")
+        params.append(platform)
+    if since is not None:
+        where.append("m.sent_at >= ?")
+        params.append(since)
+    if until is not None:
+        where.append("m.sent_at <= ?")
+        params.append(until)
+
+    result = _messages_across_conversations(where, params, page, page_size)
+    result["query"] = query
+    result["match"] = match
+    return result
+
+
+def list_person_messages(
+    person_id: int, page: int, page_size: int, include_deleted: bool = False
+) -> dict:
+    """One timeline of everything a person wrote, on any platform, newest first."""
+    get_person_row(person_id)
+    where = ["m.contact_id IN (SELECT id FROM contacts WHERE person_id = ?)"]
+    if not include_deleted:
+        where.append("m.deleted_at IS NULL")
+    result = _messages_across_conversations(where, [person_id], page, page_size)
+    result["person_id"] = person_id
+    return result
 
 
 # --------------------------------------------------------------------------

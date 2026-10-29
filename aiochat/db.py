@@ -11,12 +11,17 @@ import click
 from flask import current_app, g
 from flask.cli import with_appcontext
 
+from . import textmatch
+
 
 def get_db() -> sqlite3.Connection:
     if "db" not in g:
         conn = sqlite3.connect(current_app.config["DATABASE"])
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        # Whole-word / prefix search (see textmatch.py). Functions are
+        # per connection, so this happens for every request.
+        conn.create_function("aiochat_match", 3, textmatch.sql_function, deterministic=True)
         g.db = conn
     return g.db
 
@@ -35,6 +40,10 @@ _ADDED_COLUMNS = (
     ("outbox", "next_attempt_at", "TEXT"),
     ("messages", "edited_at", "TEXT"),
     ("messages", "deleted_at", "TEXT"),
+    # SQLite lets a REFERENCES clause point at a table that does not exist
+    # yet (people is created by schema.sql right after); it only checks the
+    # constraint on writes, and a NULL default never violates it.
+    ("contacts", "person_id", "INTEGER REFERENCES people (id) ON DELETE SET NULL"),
 )
 
 

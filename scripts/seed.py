@@ -3,7 +3,8 @@
     python scripts/seed.py
 
 Uses the database from AIOCHAT_DATABASE (default instance/aiochat.sqlite3).
-Running it twice is safe: channels are reused and messages are deduplicated.
+Running it twice is safe: channels are reused, messages are deduplicated and
+the demo person is only created once.
 """
 
 import os
@@ -54,13 +55,40 @@ SLACK = [
     slack_event("C-SUPPORT", "support", "U-MIA", "Mia", "I'll look into the exports", 330),
 ]
 
-# Mia is on both platforms, under a different display name on each.
+# Mia is on both platforms, under a different display name on each; the seed
+# groups her two accounts into one person (see PERSON below).
 TELEGRAM = [
     telegram_update(1, 9001, 9001, "Sam", "Rivera", "Hey, are we still on for Friday?", 120),
     telegram_update(2, 9001, 9001, "Sam", "Rivera", "I can bring the projector", 180),
     telegram_update(3, 9002, 9002, "Mia", "Park", "Can you send me the standup notes?", 240),
     telegram_update(4, 9002, 9002, "Mia", "Park", "Thanks!", 360),
 ]
+
+
+# Name of the demo person and the (platform, external user id) of each account.
+PERSON = ("Mia Park", [("slack", "U-MIA"), ("telegram", "9002")])
+
+
+def ensure_person(client, name, accounts):
+    """Group the demo accounts into one person, unless already grouped."""
+    contact_ids = []
+    for platform, external_user_id in accounts:
+        row = get_db().execute(
+            "SELECT ct.id, ct.person_id FROM contacts ct JOIN channels ch ON ch.id = ct.channel_id"
+            " WHERE ch.platform = ? AND ct.external_user_id = ?",
+            (platform, external_user_id),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["person_id"] is not None:
+            return row["person_id"]  # seeded earlier
+        contact_ids.append(row["id"])
+    resp = client.post(
+        "/api/people", json={"name": name, "contact_ids": contact_ids}, headers=auth_headers()
+    )
+    if resp.status_code != 201:
+        raise SystemExit(f"could not create person: {resp.get_json()}")
+    return resp.get_json()["id"]
 
 
 def ensure_channel(client, platform, name, account_id):
@@ -104,6 +132,8 @@ def main():
                 if resp.status_code != 200:
                     raise SystemExit(f"{platform} webhook failed: {resp.get_json()}")
             print(f"{platform}: channel {channel_id}, {len(payloads)} events sent")
+        person_id = ensure_person(client, *PERSON)
+        print(f"person {person_id}: {PERSON[0]} ({len(PERSON[1])} accounts)")
 
 
 if __name__ == "__main__":

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, time, timezone
+
 from flask import current_app, request
 
+from ..connectors.base import iso_utc
 from ..errors import ApiError
 
 
@@ -64,3 +67,56 @@ def required_query(name: str, max_length: int = 200) -> str:
     if len(value) > max_length:
         raise ApiError(400, "invalid_parameter", f"'{name}' must be at most {max_length} characters.")
     return value
+
+
+def optional_query(name: str, max_length: int = 200) -> str | None:
+    """A free-text query parameter that may be absent or blank."""
+    value = request.args.get(name, "").strip()
+    if not value:
+        return None
+    if len(value) > max_length:
+        raise ApiError(400, "invalid_parameter", f"'{name}' must be at most {max_length} characters.")
+    return value
+
+
+def optional_time_bound(name: str, end: bool = False) -> str | None:
+    """Parse a date or timestamp parameter into the stored ISO format.
+
+    Accepts ``YYYY-MM-DD`` or an ISO 8601 timestamp (``Z`` or an offset;
+    naive means UTC). A bare date is the start of that UTC day, or its last
+    millisecond when ``end`` is set, so ``since=D&until=D`` covers one day.
+    """
+    raw = request.args.get(name)
+    if raw is None or not raw.strip():
+        return None
+    raw = raw.strip()
+    try:
+        if len(raw) == 10:
+            day = date.fromisoformat(raw)
+            edge = time(23, 59, 59, 999000) if end else time.min
+            dt = datetime.combine(day, edge, tzinfo=timezone.utc)
+        else:
+            if raw[-1] in "Zz":  # fromisoformat only accepts 'Z' from 3.11
+                raw = raw[:-1] + "+00:00"
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise ApiError(
+            400, "invalid_parameter", f"'{name}' must be a date (YYYY-MM-DD) or an ISO 8601 timestamp."
+        ) from None
+    return iso_utc(dt)
+
+
+def id_list(data: dict, key: str) -> list[int]:
+    """A non-empty JSON array of positive integers, de-duplicated in order."""
+    raw = data.get(key)
+    if not isinstance(raw, list) or not raw:
+        raise ApiError(400, "invalid_field", f"'{key}' must be a non-empty array of ids.")
+    ids: list[int] = []
+    for value in raw:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ApiError(400, "invalid_field", f"'{key}' must contain positive integers.")
+        if value not in ids:
+            ids.append(value)
+    return ids

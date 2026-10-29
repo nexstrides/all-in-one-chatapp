@@ -15,14 +15,30 @@ CREATE TABLE IF NOT EXISTS channels (
     UNIQUE (platform, external_account_id)
 );
 
+-- A person is a user-made group of contacts: "these accounts on these
+-- platforms are all the same human". Nothing is grouped automatically.
+CREATE TABLE IF NOT EXISTS people (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL,
+    created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- A contact is one account on one channel (a Slack user in a workspace, a
+-- Telegram user as seen by a bot). It belongs to at most one person.
 CREATE TABLE IF NOT EXISTS contacts (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     channel_id       INTEGER NOT NULL REFERENCES channels (id) ON DELETE CASCADE,
     external_user_id TEXT    NOT NULL,
     display_name     TEXT    NOT NULL,
+    -- Deleting a person only ungroups its contacts.
+    person_id        INTEGER REFERENCES people (id) ON DELETE SET NULL,
     created_at       TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     UNIQUE (channel_id, external_user_id)
 );
+
+CREATE INDEX IF NOT EXISTS contacts_person
+    ON contacts (person_id)
+    WHERE person_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS conversations (
     id                       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,6 +76,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS messages_external_unique
 
 CREATE INDEX IF NOT EXISTS messages_conversation_sent
     ON messages (conversation_id, sent_at);
+
+-- Per-person timeline and unread counts read messages by sender.
+CREATE INDEX IF NOT EXISTS messages_contact_sent
+    ON messages (contact_id, sent_at);
 
 CREATE INDEX IF NOT EXISTS messages_deleted
     ON messages (deleted_at)

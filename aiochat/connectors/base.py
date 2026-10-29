@@ -89,10 +89,19 @@ class Connector:
         raise NotImplementedError
 
 
+def iso_utc(dt: datetime) -> str:
+    """Format an aware datetime the same way SQLite's defaults do.
+
+    Every timestamp in the database uses this shape
+    (``2026-10-26T21:00:00.000Z``), so string comparison orders correctly.
+    """
+    dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
 def iso_from_epoch(seconds: float) -> str:
     """Format a Unix timestamp the same way SQLite's defaults do."""
-    dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+    return iso_utc(datetime.fromtimestamp(seconds, tz=timezone.utc))
 
 
 def require(mapping: dict, key: str, where: str):
