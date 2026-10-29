@@ -20,7 +20,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 python run.py                 # http://localhost:5000, creates instance/aiochat.sqlite3
-python scripts/seed.py        # optional demo data (Slack + Telegram, one grouped person)
+python scripts/seed.py        # optional demo data (Slack + Telegram)
 ```
 
 Run the tests (no server, external services, flags or environment variables
@@ -333,7 +333,7 @@ automatic grouping.** The reasoning:
   names: Slack sends `display_name`/`real_name`, Telegram a first and last
   name and maybe a username. Names collide ("Sam", "Alex") and differ across
   platforms for the same human (the seed data's "Mia" on Slack is "Mia
-  Park" on Telegram). Anything stronger, such as an e-mail from Slack's
+  Park" on Telegram, and the seed deliberately leaves them ungrouped). Anything stronger, such as an e-mail from Slack's
   `users.info` or a phone number from a Telegram `contact` share, needs
   extra scopes and API calls that the inbox does not make today.
 - **The two kinds of mistake are not symmetric.** A missed match costs the
