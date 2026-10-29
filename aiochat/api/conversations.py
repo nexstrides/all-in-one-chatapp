@@ -23,6 +23,7 @@ def list_conversations():
             page_size,
             channel_id=optional_int("channel_id"),
             unread_only=flag("unread"),
+            person_id=optional_int("person_id"),
         )
     )
 

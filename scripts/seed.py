@@ -54,7 +54,9 @@ SLACK = [
     slack_event("C-SUPPORT", "support", "U-MIA", "Mia", "I'll look into the exports", 330),
 ]
 
-# Mia is on both platforms, under a different display name on each.
+# Mia is on both platforms, under a different display name on each. The seed
+# leaves every contact ungrouped; linking her two accounts into one person
+# (POST /api/people) is a good first thing to try with the demo data.
 TELEGRAM = [
     telegram_update(1, 9001, 9001, "Sam", "Rivera", "Hey, are we still on for Friday?", 120),
     telegram_update(2, 9001, 9001, "Sam", "Rivera", "I can bring the projector", 180),
